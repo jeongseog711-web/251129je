@@ -70,6 +70,32 @@
             background-color: #8C754D; /* 약간 어두운 골드 */
             box-shadow: 0 4px 6px -1px rgba(163, 136, 83, 0.4), 0 2px 4px -2px rgba(163, 136, 83, 0.2);
         }
+        
+        /* === 페이지 전환을 위한 CSS 클래스 === */
+        /* 기본 페이지 컨테이너: 절대 위치로 오버레이 가능하게 설정 */
+        .page-content {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            transition: opacity 0.4s ease-in-out, transform 0.4s ease-in-out;
+        }
+
+        /* 현재 페이지가 아닐 때의 스타일 (슬라이드 & 페이드) */
+        .page-hidden {
+            opacity: 0;
+            transform: translateX(50px); /* 오른쪽으로 살짝 밀어 숨김 */
+            pointer-events: none;
+            display: none; /* 전환 후 완전히 숨겨서 레이아웃 영향 제거 */
+        }
+        
+        /* 현재 페이지일 때의 스타일 */
+        .page-visible {
+            opacity: 1;
+            transform: translateX(0);
+            pointer-events: auto;
+            display: block;
+        }
 
     </style>
 </head>
@@ -108,11 +134,50 @@
         const clientNameInput = document.getElementById('client-name');
         const scalpTypeInput = document.getElementById('scalp-type');
         const lastServiceDateInput = document.getElementById('last-service-date');
+        
+        // 페이지 요소
+        const pageMain = document.getElementById('page-main');
+        const pageCrm = document.getElementById('page-crm');
+
 
         // Firestore 경로 설정
         const getCollectionRef = (userId) => {
              // 사설 데이터 경로: /artifacts/{appId}/users/{userId}/haircare_records
             return collection(db, 'artifacts', appId, 'users', userId, 'haircare_records');
+        };
+
+        // 페이지 전환 로직
+        window.goToPage = (pageNumber) => {
+            const transitionDuration = 400; // 0.4s
+            
+            if (pageNumber === 1) {
+                // CRM 페이지 숨기기
+                pageCrm.classList.remove('page-visible');
+                pageCrm.classList.add('page-hidden');
+                
+                // 메인 페이지 표시
+                pageMain.style.display = 'block'; // 먼저 보여준 다음 트랜지션 시작
+                setTimeout(() => {
+                    pageMain.classList.remove('page-hidden');
+                    pageMain.classList.add('page-visible');
+                    // 필요 시 스크롤 맨 위로 이동
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }, 50);
+
+            } else if (pageNumber === 2) {
+                // 메인 페이지 숨기기
+                pageMain.classList.remove('page-visible');
+                pageMain.classList.add('page-hidden');
+                
+                // CRM 페이지 표시
+                pageCrm.style.display = 'block'; // 먼저 보여준 다음 트랜지션 시작
+                 setTimeout(() => {
+                    pageCrm.classList.remove('page-hidden');
+                    pageCrm.classList.add('page-visible');
+                    // 필요 시 스크롤 맨 위로 이동
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }, 50);
+            }
         };
 
         // 1. 인증 및 Firestore 초기화
@@ -122,6 +187,11 @@
                 userIdDisplay.textContent = currentUserId;
                 loadingEl.classList.add('hidden');
                 appContainer.classList.remove('hidden');
+                
+                // 페이지 1을 기본으로 표시하고, 페이지 2는 숨김 처리
+                pageMain.classList.add('page-visible');
+                pageCrm.classList.add('page-hidden');
+                pageCrm.style.display = 'none'; // 초기 로드 시 CRM 페이지 숨기기
                 
                 // Firestore 실시간 리스너 연결
                 setupFirestoreListener(currentUserId);
@@ -296,7 +366,7 @@
             return { riskAssessment, possibleServices, recommendedProducts: fullRecommendedProducts, damageLevel: currentDamageLevel };
         };
 
-        // 3. 기록 저장 핸들러 (기존 로직 그대로 유지)
+        // 3. 기록 저장 핸들러 (기존 로직 수정: 저장 후 CRM 페이지로 이동 추가)
         document.getElementById('analysis-form').addEventListener('submit', async (e) => {
             e.preventDefault();
             if (!currentUserId) {
@@ -349,6 +419,9 @@
                 
                 // 기록 저장 성공 후 재방문 유도 메시지를 즉시 시뮬레이션
                 window.simulateReminder(finalDamageLevel);
+
+                // *** 수정 사항: 저장 후 자동으로 기록 관리 페이지로 이동 ***
+                goToPage(2);
 
             } catch (error) {
                 console.error("Firestore 저장 오류:", error);
@@ -538,14 +611,13 @@
             }, 5000);
         };
         
-        // 6. 확인 버튼 클릭 핸들러 (모의 함수)
+        // 6. 확인 버튼 클릭 핸들러 (수정됨: 확인 후 메인 페이지로 복귀)
         window.handleRecordConfirmation = () => {
-             alertMessage('success', '고객 기록을 확인하고 완료 처리했습니다.');
+             alertMessage('success', '고객 기록을 확인하고 완료 처리했습니다. 메인 페이지로 돌아갑니다.');
              // TODO: 실제 앱에서는 이 함수 내에서 Firestore의 상태 필드(예: 'isReviewed: true')를 업데이트하는 로직을 구현합니다.
              console.log("고객 기록 확인 완료 (실제 Firestore 업데이트 로직 필요)");
+             goToPage(1); // 메인 입력 페이지로 돌아가기
         };
-
-
     </script>
 
     <!-- UI 영역 시작 -->
@@ -567,114 +639,124 @@
         시스템 로드 및 인증 중입니다...
     </div>
 
-    <!-- 메인 애플리케이션 컨테이너 -->
-    <div id="app-container" class="hidden">
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <!-- 1. AI 기반 모발·두피 진단 입력 폼 (왼쪽 칼럼) -->
-            <div class="lg:col-span-1 card p-8">
-                <!-- 텍스트 색상 변경 -->
-                <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">1. 고객 상태 입력 및 AI 분석 요청</h2>
-                
-                <form id="analysis-form" class="space-y-5">
-                    <!-- 고객명 -->
-                    <div>
-                        <label for="client-name" class="block text-sm font-medium text-gray-700">고객명 <span class="text-red-500">*</span></label>
-                        <input type="text" id="client-name" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
-                    </div>
+    <!-- 메인 애플리케이션 컨테이너 (relative로 설정하여 absolute 페이지들을 담음) -->
+    <div id="app-container" class="hidden relative">
+        <!-- 페이지 1: 입력 및 진단 결과 (기본 화면) -->
+        <div id="page-main" class="page-content py-4 sm:py-8 min-h-[80vh] bg-body">
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- 1. AI 기반 모발·두피 진단 입력 폼 (왼쪽 칼럼) -->
+                <div class="lg:col-span-1 card p-8">
+                    <!-- 텍스트 색상 변경 -->
+                    <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">1. 고객 상태 입력 및 AI 분석 요청</h2>
+                    
+                    <form id="analysis-form" class="space-y-5">
+                        <!-- 고객명 -->
+                        <div>
+                            <label for="client-name" class="block text-sm font-medium text-gray-700">고객명 <span class="text-red-500">*</span></label>
+                            <input type="text" id="client-name" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
+                        </div>
 
-                    <!-- 두피 타입 -->
-                    <div>
-                        <label for="scalp-type" class="block text-sm font-medium text-gray-700">두피 타입</label>
-                        <select id="scalp-type" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
-                            <option value="dry">건성</option>
-                            <option value="oily">지성</option>
-                            <option value="sensitive">민감성</option>
-                            <option value="composite">복합성</option>
-                        </select>
-                    </div>
+                        <!-- 두피 타입 -->
+                        <div>
+                            <label for="scalp-type" class="block text-sm font-medium text-gray-700">두피 타입</label>
+                            <select id="scalp-type" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
+                                <option value="dry">건성</option>
+                                <option value="oily">지성</option>
+                                <option value="sensitive">민감성</option>
+                                <option value="composite">복합성</option>
+                            </select>
+                        </div>
 
-                    <!-- 최근 시술 이력 (복수 선택 가능한 체크박스로 변경) -->
-                    <div>
-                        <label class="block text-sm font-medium text-gray-700 mb-2">최근 시술 내역 (복수 선택 가능)</label>
-                        <div id="last-service-type-container" class="space-y-1 flex flex-wrap gap-2">
-                            <!-- 체크박스 색상 변경: primary 색상 적용 -->
-                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
-                                <input type="checkbox" name="last-service-type" value="cut" class="rounded text-primary focus:ring-primary h-5 w-5">
-                                <span class="ml-2 text-sm text-gray-700">컷</span>
-                            </label>
-                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
-                                <input type="checkbox" name="last-service-type" value="perm" class="rounded text-primary focus:ring-primary h-5 w-5">
-                                <span class="ml-2 text-sm text-gray-700">펌 (일반)</span>
-                            </label>
-                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
-                                <input type="checkbox" name="last-service-type" value="straightening" class="rounded text-primary focus:ring-primary h-5 w-5">
-                                <span class="ml-2 text-sm text-gray-700">매직/스트레이트</span>
-                            </label>
-                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
-                                <input type="checkbox" name="last-service-type" value="color" class="rounded text-primary focus:ring-primary h-5 w-5">
-                                <span class="ml-2 text-sm text-gray-700">염색</span>
-                            </label>
-                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
-                                <input type="checkbox" name="last-service-type" value="bleach" class="rounded text-primary focus:ring-primary h-5 w-5">
-                                <span class="ml-2 text-sm text-gray-700">탈색</span>
-                            </label>
-                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
-                                <input type="checkbox" name="last-service-type" value="clinic" class="rounded text-primary focus:ring-primary h-5 w-5">
-                                <span class="ml-2 text-sm text-gray-700">클리닉</span>
-                            </label>
+                        <!-- 최근 시술 이력 (복수 선택 가능한 체크박스로 변경) -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">최근 시술 내역 (복수 선택 가능)</label>
+                            <div id="last-service-type-container" class="space-y-1 flex flex-wrap gap-2">
+                                <!-- 체크박스 색상 변경: primary 색상 적용 -->
+                                <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                    <input type="checkbox" name="last-service-type" value="cut" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                    <span class="ml-2 text-sm text-gray-700">컷</span>
+                                </label>
+                                <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                    <input type="checkbox" name="last-service-type" value="perm" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                    <span class="ml-2 text-sm text-gray-700">펌 (일반)</span>
+                                </label>
+                                <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                    <input type="checkbox" name="last-service-type" value="straightening" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                    <span class="ml-2 text-sm text-gray-700">매직/스트레이트</span>
+                                </label>
+                                <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                    <input type="checkbox" name="last-service-type" value="color" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                    <span class="ml-2 text-sm text-gray-700">염색</span>
+                                </label>
+                                <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                    <input type="checkbox" name="last-service-type" value="bleach" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                    <span class="ml-2 text-sm text-gray-700">탈색</span>
+                                </label>
+                                <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                    <input type="checkbox" name="last-service-type" value="clinic" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                    <span class="ml-2 text-sm text-gray-700">클리닉</span>
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- 마지막 시술 날짜 -->
+                        <div>
+                            <label for="last-service-date" class="block text-sm font-medium text-gray-700">마지막 시술 날짜</label>
+                            <input type="date" id="last-service-date" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
+                        </div>
+                        
+                        <!-- 버튼 색상 변경: primary (딥 네이비) 적용 -->
+                        <button type="submit" class="w-full py-3 px-4 border border-transparent rounded-xl shadow-lg text-lg font-medium text-white bg-primary hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-gold transition duration-150">
+                            AI 분석 및 기록 저장 (저장 후 5번 페이지로 이동)
+                        </button>
+                    </form>
+
+                    <!-- 버튼 스타일 변경: 골드 적용 -->
+                    <button onclick="simulateReminder('none')" class="w-full mt-4 py-2 px-4 border border-accent-gold rounded-xl text-sm font-medium text-primary bg-yellow-50 hover:bg-yellow-100 focus:outline-none transition duration-150">
+                        4. 재방문 유도 메시지 시뮬레이션 (수동 실행 버튼)
+                    </button>
+                    
+                    <!-- 페이지 이동 버튼 (다음 페이지로) -->
+                    <button onclick="goToPage(2)" class="w-full mt-6 py-3 px-4 rounded-xl text-lg font-medium text-white bg-accent-gold hover:bg-[#8C754D] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-gold transition duration-150">
+                        ➡️ 기록 관리 페이지로 바로 이동 (5번)
+                    </button>
+                </div>
+
+                <!-- 2, 3. 실시간 시술 안내 및 제품 추천 (중앙 칼럼) -->
+                <div class="lg:col-span-2 space-y-8">
+                    <!-- 2. 실시간 시술 안내 -->
+                    <div class="card p-8">
+                        <!-- 텍스트 색상 변경 -->
+                        <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">2. 실시간 AI 시술 안내 및 위험성 진단</h2>
+                        <div id="diagnosis-result" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
+                            <p class="text-gray-500">👆 왼쪽에 고객 상태를 입력하고 'AI 분석 요청' 버튼을 누르면 실시간 분석 결과가 여기에 표시됩니다.</p>
                         </div>
                     </div>
 
-                    <!-- 마지막 시술 날짜 -->
-                    <div>
-                        <label for="last-service-date" class="block text-sm font-medium text-gray-700">마지막 시술 날짜</label>
-                        <input type="date" id="last-service-date" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
+                    <!-- 3. AI 추천 헤어 제품 -->
+                    <div class="card p-8">
+                        <!-- 텍스트 색상 변경 -->
+                        <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">3. AI 추천 헤어 제품 처방전 (제품 판매 증대)</h2>
+                        <div id="recommendation-list" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
+                            <p class="text-gray-500">AI가 고객 상태 기반으로 맞춤형 브랜드 제품을 추천합니다.</p>
+                        </div>
                     </div>
-                    
-                    <!-- 버튼 색상 변경: primary (딥 네이비) 적용 -->
-                    <button type="submit" class="w-full py-3 px-4 border border-transparent rounded-xl shadow-lg text-lg font-medium text-white bg-primary hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-gold transition duration-150">
-                        AI 분석 및 기록 저장
-                    </button>
-                </form>
 
-                <!-- 버튼 스타일 변경: 골드 적용 -->
-                <button onclick="simulateReminder('none')" class="w-full mt-4 py-2 px-4 border border-accent-gold rounded-xl text-sm font-medium text-primary bg-yellow-50 hover:bg-yellow-100 focus:outline-none transition duration-150">
-                    4. 재방문 유도 메시지 시뮬레이션 (수동 실행 버튼)
-                </button>
-            </div>
-
-            <!-- 2, 3. 실시간 시술 안내 및 제품 추천 (중앙 칼럼) -->
-            <div class="lg:col-span-2 space-y-8">
-                <!-- 2. 실시간 시술 안내 -->
-                <div class="card p-8">
-                    <!-- 텍스트 색상 변경 -->
-                    <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">2. 실시간 AI 시술 안내 및 위험성 진단</h2>
-                    <div id="diagnosis-result" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
-                        <p class="text-gray-500">👆 왼쪽에 고객 상태를 입력하고 'AI 분석 요청' 버튼을 누르면 실시간 분석 결과가 여기에 표시됩니다.</p>
-                    </div>
-                </div>
-
-                <!-- 3. AI 추천 헤어 제품 -->
-                <div class="card p-8">
-                    <!-- 텍스트 색상 변경 -->
-                    <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">3. AI 추천 헤어 제품 처방전 (제품 판매 증대)</h2>
-                    <div id="recommendation-list" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
-                        <p class="text-gray-500">AI가 고객 상태 기반으로 맞춤형 브랜드 제품을 추천합니다.</p>
-                    </div>
-                </div>
-
-                <!-- 4. 알림 로그 -->
-                <div class="card p-8">
-                    <!-- 텍스트 색상 변경 -->
-                    <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">4. 케어 알림 및 재방문 유도 메시지 로그</h2>
-                    <div id="reminder-log" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
-                        <p class="text-gray-500">하단의 버튼을 눌러 발송 메시지를 확인해보세요.</p>
+                    <!-- 4. 알림 로그 -->
+                    <div class="card p-8">
+                        <!-- 텍스트 색상 변경 -->
+                        <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">4. 케어 알림 및 재방문 유도 메시지 로그</h2>
+                        <div id="reminder-log" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
+                            <p class="text-gray-500">하단의 버튼을 눌러 발송 메시지를 확인해보세요.</p>
+                        </div>
                     </div>
                 </div>
             </div>
-            
-            <!-- 5. 헤어샵 내부 고객 기록 자동 정리 (하단 전역) -->
-            <div class="lg:col-span-3 card p-8 mt-8">
+        </div>
+
+        <!-- 페이지 2: CRM 고객 기록 (숨겨진 상태로 시작) -->
+        <div id="page-crm" class="page-content py-4 sm:py-8 bg-body">
+             <div class="lg:col-span-3 card p-8 mb-8">
                 <!-- 텍스트 색상 변경 -->
                 <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">5. 헤어샵 내부 고객 기록 자동 정리 (CRM)</h2>
                 <div class="scroll-container bg-white border border-gray-200 rounded-xl">
@@ -684,68 +766,72 @@
                     </div>
                 </div>
                 
-                <!-- === 확인 버튼 추가 === -->
+                <!-- === 확인 버튼 (수정됨: 메인 페이지로 돌아가기) === -->
                 <button onclick="handleRecordConfirmation()" class="w-full mt-6 py-3 px-4 border border-transparent rounded-xl shadow-lg text-lg font-medium text-white bg-primary hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-gold transition duration-150">
-                    기록 확인 완료
+                    기록 확인 완료 (메인 페이지로 돌아가기)
+                </button>
+                
+                 <!-- 페이지 이동 버튼 (이전 페이지로) -->
+                <button onclick="goToPage(1)" class="w-full mt-4 py-3 px-4 border border-gray-300 rounded-xl text-lg font-medium text-primary bg-white hover:bg-gray-100 focus:outline-none transition duration-150">
+                    ⬅️ 입력/진단 페이지로 돌아가기
                 </button>
             </div>
+            
+            <!-- 6. 하이엔드 살롱 정보 및 푸터 (CRM 페이지에 포함) -->
+            <footer class="bg-secondary text-white mt-12 py-10">
+                <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-8 border-b border-gray-700 pb-8 mb-8">
+                        
+                        <!-- 1. 살롱 브랜드 정보 -->
+                        <div class="col-span-2 md:col-span-1">
+                            <h5 class="text-2xl font-extrabold mb-4 text-accent-gold">LUXURY HAIR SALON</h5>
+                            <p class="text-gray-400 text-sm">
+                                최고급 서비스와 AI 진단 기술이 결합된 하이엔드 헤어 살롱입니다. 고객 한 분 한 분에게 완벽한 스타일과 케어를 제공합니다.
+                            </p>
+                        </div>
+                        
+                        <!-- 2. 고객센터 / 전화번호 -->
+                        <div>
+                            <h5 class="text-lg font-semibold mb-4 text-gray-200">고객센터 / 예약 문의</h5>
+                            <p class="text-accent-gold text-2xl font-bold mb-2">
+                                02-1234-5678
+                            </p>
+                            <p class="text-gray-400 text-sm">
+                                운영 시간: 10:00 - 20:00<br>
+                                (매주 월요일 정기 휴무)
+                            </p>
+                        </div>
+
+                        <!-- 3. 오시는 길 / 주소 -->
+                        <div>
+                            <h5 class="text-lg font-semibold mb-4 text-gray-200">오시는 길 (Address)</h5>
+                            <p class="text-gray-400 text-sm">
+                                서울특별시 강남구 테헤란로 123, 1층<br>
+                                (강남역 1번 출구 도보 5분)
+                            </p>
+                            <a href="#" class="mt-2 inline-block text-sm text-accent-gold hover:text-white transition duration-200 underline">
+                                [자세한 지도 보기]
+                            </a>
+                        </div>
+                        
+                        <!-- 4. 자주 찾는 링크 -->
+                        <div>
+                            <h5 class="text-lg font-semibold mb-4 text-gray-200">Quick Links</h5>
+                            <ul class="space-y-2">
+                                <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">살롱 소개</a></li>
+                                <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">가격표 및 서비스</a></li>
+                                <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">온라인 예약</a></li>
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <!-- 저작권 -->
+                    <div class="text-center text-sm text-gray-500">
+                        &copy; 2024 LUXURY HAIR SALON. Powered by AI Care System. All rights reserved.
+                    </div>
+                </div>
+            </footer>
         </div>
     </div>
-    
-    <!-- 6. 하이엔드 살롱 정보 및 푸터 -->
-    <footer class="bg-secondary text-white mt-12 py-10">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div class="grid grid-cols-2 md:grid-cols-4 gap-8 border-b border-gray-700 pb-8 mb-8">
-                
-                <!-- 1. 살롱 브랜드 정보 -->
-                <div class="col-span-2 md:col-span-1">
-                    <h5 class="text-2xl font-extrabold mb-4 text-accent-gold">LUXURY HAIR SALON</h5>
-                    <p class="text-gray-400 text-sm">
-                        최고급 서비스와 AI 진단 기술이 결합된 하이엔드 헤어 살롱입니다. 고객 한 분 한 분에게 완벽한 스타일과 케어를 제공합니다.
-                    </p>
-                </div>
-                
-                <!-- 2. 고객센터 / 전화번호 -->
-                <div>
-                    <h5 class="text-lg font-semibold mb-4 text-gray-200">고객센터 / 예약 문의</h5>
-                    <p class="text-accent-gold text-2xl font-bold mb-2">
-                        02-1234-5678
-                    </p>
-                    <p class="text-gray-400 text-sm">
-                        운영 시간: 10:00 - 20:00<br>
-                        (매주 월요일 정기 휴무)
-                    </p>
-                </div>
-
-                <!-- 3. 오시는 길 / 주소 -->
-                <div>
-                    <h5 class="text-lg font-semibold mb-4 text-gray-200">오시는 길 (Address)</h5>
-                    <p class="text-gray-400 text-sm">
-                        서울특별시 강남구 테헤란로 123, 1층<br>
-                        (강남역 1번 출구 도보 5분)
-                    </p>
-                    <a href="#" class="mt-2 inline-block text-sm text-accent-gold hover:text-white transition duration-200 underline">
-                        [자세한 지도 보기]
-                    </a>
-                </div>
-                
-                <!-- 4. 자주 찾는 링크 -->
-                <div>
-                    <h5 class="text-lg font-semibold mb-4 text-gray-200">Quick Links</h5>
-                    <ul class="space-y-2">
-                        <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">살롱 소개</a></li>
-                        <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">가격표 및 서비스</a></li>
-                        <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">온라인 예약</a></li>
-                    </ul>
-                </div>
-            </div>
-            
-            <!-- 저작권 -->
-            <div class="text-center text-sm text-gray-500">
-                &copy; 2024 LUXURY HAIR SALON. Powered by AI Care System. All rights reserved.
-            </div>
-        </div>
-    </footer>
-
 </body>
 </html>

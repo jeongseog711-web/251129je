@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 헤어케어 어시스턴트</title>
+    <!-- Tailwind CSS CDN 로드 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        // === 하이엔드 살롱 컨셉의 Tailwind 색상 팔레트 ===
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'salon-bg': '#EFECE7',       // 밝은 베이지 (마블 질감의 바탕색)
+                        'primary': '#1A3C4E',        // 딥 네이비 (주요 텍스트, 버튼 배경)
+                        'secondary': '#0A1C2A',      // 제목 텍스트: 거의 검정에 가까운 네이비
+                        'accent-gold': '#A38853',    // 골드/황동 (포인트 색상)
+                        'card-white': '#FFFFFF',     // 카드 배경: 흰색
+                        'danger': '#B91C1C',         // 위험 요소
+                        'info-subtle': '#F9FAFB',    // 정보 배경
+                    },
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <style>
+        /* 기본 스타일 및 Inter 폰트 적용 */
+        body { font-family: 'Inter', sans-serif; }
+        
+        /* 배경색 변경: 은은한 마블 텍스처 느낌 */
+        .bg-body { 
+            background-color: #EFECE7; 
+            /* Subtle marble/texture overlay using CSS gradient for depth */
+            background-image: radial-gradient(circle at center, #ffffff33 1px, transparent 1px), 
+                              radial-gradient(circle at center, #00000011 1px, transparent 1px);
+            background-size: 8px 8px;
+        } 
+        
+        .card {
+            background-color: var(--tw-bg-card-white);
+            border-radius: 1.5rem; /* 더 둥글게 */
+            /* 그림자 강화: 고급스러운 3D 부각 효과 */
+            box-shadow: 0 20px 25px -10px rgba(0, 0, 0, 0.2), 0 8px 10px -6px rgba(0, 0, 0, 0.08);
+            border: 1px solid #F3F4F6;
+        }
+        
+        .scroll-container { max-height: 50vh; overflow-y: auto; }
+        /* 스크롤바 커스터마이징 (액센트 골드 색상 적용) */
+        .scroll-container::-webkit-scrollbar { width: 8px; }
+        .scroll-container::-webkit-scrollbar-thumb {
+            background-color: var(--tw-bg-accent-gold);
+            border-radius: 10px;
+        }
+        .scroll-container::-webkit-scrollbar-track {
+            background-color: #F5F5F4;
+            border-radius: 10px;
+        }
+
+        /* 골드 색상 버튼 스타일 */
+        .btn-gold {
+            background-color: var(--tw-bg-accent-gold);
+            color: white;
+            transition: all 0.2s;
+        }
+        .btn-gold:hover {
+            background-color: #8C754D; /* 약간 어두운 골드 */
+            box-shadow: 0 4px 6px -1px rgba(163, 136, 83, 0.4), 0 2px 4px -2px rgba(163, 136, 83, 0.2);
+        }
+
+    </style>
+</head>
+<body class="bg-body min-h-screen p-4 sm:p-8">
+
+    <!-- Firebase SDK Imports (로직은 그대로 유지) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, onSnapshot, collection, query, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase 설정 (전역 변수 사용)
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-haircare-app-id';
+
+        // 서비스 초기화
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+        
+        // 디버그 로깅 활성화
+        setLogLevel('Debug');
+
+        let currentUserId = null;
+
+        // UI 요소
+        const loadingEl = document.getElementById('loading-state');
+        const appContainer = document.getElementById('app-container');
+        const userIdDisplay = document.getElementById('user-id-display');
+        const recordsList = document.getElementById('records-list');
+        const diagnosisResult = document.getElementById('diagnosis-result');
+        const recommendationList = document.getElementById('recommendation-list');
+        const reminderLog = document.getElementById('reminder-log');
+
+        const clientNameInput = document.getElementById('client-name');
+        const scalpTypeInput = document.getElementById('scalp-type');
+        const lastServiceDateInput = document.getElementById('last-service-date');
+
+        // Firestore 경로 설정
+        const getCollectionRef = (userId) => {
+             // 사설 데이터 경로: /artifacts/{appId}/users/{userId}/haircare_records
+            return collection(db, 'artifacts', appId, 'users', userId, 'haircare_records');
+        };
+
+        // 1. 인증 및 Firestore 초기화
+        onAuthStateChanged(auth, async (user) => {
+            if (user) {
+                currentUserId = user.uid;
+                userIdDisplay.textContent = currentUserId;
+                loadingEl.classList.add('hidden');
+                appContainer.classList.remove('hidden');
+                
+                // Firestore 실시간 리스너 연결
+                setupFirestoreListener(currentUserId);
+            } else {
+                // 인증 토큰이 있으면 로그인 시도, 없으면 익명 로그인
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                } catch (error) {
+                    console.error("인증 실패:", error);
+                    alertMessage("error", "인증에 실패했습니다. 콘솔을 확인해주세요.");
+                    loadingEl.textContent = '인증 오류: 앱을 로드할 수 없습니다.';
+                }
+            }
+        });
+
+        // =========================================================================
+        // 모의 제품 상세 정보 (이미지 및 가격)를 가져오는 함수
+        const getProductDetails = (productName) => {
+            const mockProducts = {
+                "극손상 모발용 집중 영양 마스크": {
+                    image: `https://placehold.co/80x80/A38853/FFFFFF?text=Mask`, // Gold Accent
+                    price: "58,000원"
+                },
+                "고농축 단백질 세럼": {
+                    image: `https://placehold.co/80x80/1A3C4E/FFFFFF?text=Serum`, // Primary Dark
+                    price: "42,000원"
+                },
+                "데일리 손상 케어 샴푸 (pH 약산성)": {
+                    image: `https://placehold.co/80x80/6B7280/FFFFFF?text=Shampoo`, // Subtle Gray
+                    price: "29,000원"
+                },
+                "수분 공급 트리트먼트": {
+                    image: `https://placehold.co/80x80/D1D5DB/000000?text=Treat`, // Light Gray
+                    price: "35,000원"
+                },
+                "지성 두피 딥 클렌징 샴푸": {
+                    image: `https://placehold.co/80x80/1A3C4E/FFFFFF?text=Oily`,
+                    price: "31,000원"
+                },
+                "건성 두피 보습 앰플": {
+                    image: `https://placehold.co/80x80/A38853/FFFFFF?text=Dry`,
+                    price: "65,000원"
+                },
+                "민감 두피 진정 토닉": {
+                    image: `https://placehold.co/80x80/0A1C2A/FFFFFF?text=Tone`,
+                    price: "49,000원"
+                },
+                "컬러 유지력 향상 샴푸": {
+                    image: `https://placehold.co/80x80/A38853/FFFFFF?text=Color`,
+                    price: "33,000원"
+                },
+                "컬 탄력 강화 에센스": {
+                    image: `https://placehold.co/80x80/1A3C4E/FFFFFF?text=Curl`,
+                    price: "45,000원"
+                }
+            };
+            return mockProducts[productName] || { image: "https://placehold.co/80x80/E5E5E5/999999?text=N/A", price: "미정" };
+        };
+        // =========================================================================
+
+        // =========================================================================
+        // [핵심 로직] 시술 이력 및 날짜 기반으로 모발 손상도를 추론하는 함수 (기존 로직 그대로 유지)
+        const inferDamageLevel = (services, lastServiceDate) => {
+            let damage = 'none';
+
+            // 1. 시술 종류 기반 손상도 결정
+            if (services.includes('bleach')) {
+                damage = 'severe'; // 탈색 이력은 심각한 손상으로 추정
+            } else if (services.includes('color') && (services.includes('perm') || services.includes('straightening'))) {
+                damage = 'moderate'; // 염색과 펌이 같이 있는 경우 보통 손상으로 추정
+            } else if (services.includes('color') || services.includes('perm') || services.includes('straightening')) {
+                damage = 'light'; // 염색 또는 펌만 있는 경우 경미한 손상으로 추정
+            } else if (services.includes('clinic') && services.length > 1) {
+                // 클리닉을 다른 시술과 함께 받았다면, 이전에 손상이 있었을 가능성이 높음
+                if (damage === 'none') damage = 'light';
+            }
+
+
+            // 2. 시술 시점 기반 손상도 증폭 (화학 시술 후 30일 이내인 경우)
+            if (lastServiceDate) {
+                const lastDate = new Date(lastServiceDate);
+                const today = new Date();
+                const diffTime = Math.abs(today - lastDate);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                
+                const chemicalServices = ['perm', 'straightening', 'color', 'bleach'];
+                const hasChemical = services.some(s => chemicalServices.includes(s));
+
+                if (diffDays < 30 && hasChemical) {
+                    if (damage === 'light') damage = 'moderate';
+                    else if (damage === 'none') damage = 'light';
+                }
+            }
+
+            return damage;
+        };
+        // =========================================================================
+
+
+        // 2. 모의 AI 진단 및 추천 로직 (기존 로직 그대로 유지)
+        const runAIDiagnosis = (clientName, scalpType, damageLevelPlaceholder, lastServiceTypes, lastServiceDate) => {
+            
+            // lastServiceTypes가 배열인지 확인 (방어적 코드)
+            const services = Array.isArray(lastServiceTypes) ? lastServiceTypes : [lastServiceTypes];
+
+            // **시술 이력 및 날짜를 기반으로 손상도를 추론합니다.**
+            const currentDamageLevel = inferDamageLevel(services, lastServiceDate);
+
+            let riskAssessment = "현재 모발 상태는 양호하여 모든 시술이 가능합니다.";
+            let possibleServices = "컷, 염색, 일반 펌, 매직 펌";
+            let recommendedProducts = []; // 임시로 제품 이름(string)만 저장
+
+            // 모의 AI 로직 (추론된 손상도 currentDamageLevel 사용)
+            
+            if (currentDamageLevel === 'severe') {
+                riskAssessment = "모발 손상도가 심각하여 염색/탈색/펌 시술은 **매우 위험**하며 다음 방문을 강력히 권장합니다. 시술 시 복구가 불가능할 수 있습니다.";
+                possibleServices = "모발 클리닉 (극손상용), 두피 진정 케어";
+                recommendedProducts.push("극손상 모발용 집중 영양 마스크");
+                recommendedProducts.push("고농축 단백질 세럼");
+            } else if (currentDamageLevel === 'moderate') {
+                riskAssessment = "모발 손상도가 보통입니다. 염색/탈색은 손상도를 높일 수 있으므로 최소 2주 후 권장합니다. 펌 시술은 가능하나 컬 유지력이 약할 수 있습니다.";
+                possibleServices = "컷, 일반 펌 (손상 모발용 약제 사용), 수분 케어";
+                recommendedProducts.push("데일리 손상 케어 샴푸 (pH 약산성)");
+                recommendedProducts.push("수분 공급 트리트먼트");
+            }
+            // 'none' 또는 'light'일 경우 초기 riskAssessment와 possibleServices 유지
+
+            if (scalpType === 'oily') {
+                recommendedProducts.push("지성 두피 딥 클렌징 샴푸");
+            } else if (scalpType === 'dry') {
+                recommendedProducts.push("건성 두피 보습 앰플");
+            } else if (scalpType === 'sensitive') {
+                recommendedProducts.push("민감 두피 진정 토닉");
+            }
+
+            // 시술 이력 기반 제품 추천 (배열 포함 여부 체크)
+            if (services.includes('color') || services.includes('bleach')) {
+                recommendedProducts.push("컬러 유지력 향상 샴푸");
+            }
+            if (services.includes('perm') || services.includes('straightening')) {
+                recommendedProducts.push("컬 탄력 강화 에센스");
+            }
+
+            // 시술 적기 안내 (단순화된 모의)
+            if (lastServiceDate) {
+                const lastDate = new Date(lastServiceDate);
+                const today = new Date();
+                const diffTime = Math.abs(today - lastDate);
+                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                
+                // 화학 시술 이력이 있는지 확인
+                const hasRecentChemical = services.some(s => ['perm', 'straightening', 'color', 'bleach'].includes(s));
+
+                if (diffDays < 30 && hasRecentChemical) {
+                    riskAssessment += ` (마지막 시술일(${lastServiceDate})로부터 ${diffDays}일 경과. 가벼운 케어만 권장)`;
+                } else if (diffDays >= 60 && currentDamageLevel !== 'severe' && (services.includes('color') || services.includes('perm'))) {
+                     riskAssessment += ` (염색 또는 펌 시술 적기가 다가왔습니다. 재방문을 유도하세요!)`;
+                }
+            }
+            
+            // 제품 이름 배열을 전체 상세 정보 객체 배열로 변환
+            const fullRecommendedProducts = recommendedProducts.map(name => ({
+                name,
+                ...getProductDetails(name) // 이미지와 가격 추가
+            }));
+
+
+            return { riskAssessment, possibleServices, recommendedProducts: fullRecommendedProducts, damageLevel: currentDamageLevel };
+        };
+
+        // 3. 기록 저장 핸들러 (기존 로직 그대로 유지)
+        document.getElementById('analysis-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!currentUserId) {
+                alertMessage('error', '사용자 인증 정보를 찾을 수 없습니다. 잠시 후 다시 시도해주세요.');
+                return;
+            }
+
+            const clientName = clientNameInput.value.trim();
+            const scalpType = scalpTypeInput.value;
+            const damageLevelPlaceholder = 'none'; 
+            
+            const checkedServices = document.querySelectorAll('input[name="last-service-type"]:checked');
+            const lastServiceTypes = Array.from(checkedServices).map(cb => cb.value);
+            const lastServiceTypeData = lastServiceTypes.length > 0 ? lastServiceTypes : ['none'];
+
+
+            const lastServiceDate = lastServiceDateInput.value;
+
+            if (!clientName) {
+                alertMessage('warning', '고객명을 입력해주세요.');
+                return;
+            }
+
+            // runAIDiagnosis 호출 및 결과 분해
+            const aiResults = runAIDiagnosis(clientName, scalpType, damageLevelPlaceholder, lastServiceTypeData, lastServiceDate);
+            const { riskAssessment, possibleServices, recommendedProducts: fullRecommendedProducts, damageLevel: finalDamageLevel } = aiResults;
+
+            // UI에 결과 표시 (full product objects 사용)
+            displayDiagnosis(riskAssessment, possibleServices, fullRecommendedProducts, finalDamageLevel);
+
+            const recordData = {
+                clientName: clientName,
+                timestamp: serverTimestamp(),
+                diagnosis: {
+                    scalpType,
+                    damageLevel: finalDamageLevel, // 최종적으로 추론된 손상 레벨 저장
+                    lastServiceType: lastServiceTypeData, // 배열로 저장
+                    lastServiceDate,
+                    riskAssessment,
+                    possibleServices
+                },
+                // Firestore에는 제품 이름(name)만 저장
+                recommendedProducts: fullRecommendedProducts.map(p => p.name), 
+                userId: currentUserId 
+            };
+
+            try {
+                await addDoc(getCollectionRef(currentUserId), recordData);
+                alertMessage('success', `"${clientName}" 고객의 상태 분석 및 기록이 성공적으로 저장되었습니다.`);
+                
+                // 기록 저장 성공 후 재방문 유도 메시지를 즉시 시뮬레이션
+                window.simulateReminder(finalDamageLevel);
+
+            } catch (error) {
+                console.error("Firestore 저장 오류:", error);
+                alertMessage('error', '데이터 저장에 실패했습니다. 콘솔을 확인해주세요.');
+            }
+        });
+
+        // 4. Firestore 실시간 리스너 (기존 로직 그대로 유지)
+        const setupFirestoreListener = (userId) => {
+            const q = query(getCollectionRef(userId));
+            
+            onSnapshot(q, (snapshot) => {
+                const records = [];
+                snapshot.forEach(doc => {
+                    records.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // 시간 역순으로 정렬 (가장 최근 기록이 위로)
+                records.sort((a, b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
+
+                renderRecords(records);
+            }, (error) => {
+                console.error("Firestore 실시간 업데이트 오류:", error);
+                alertMessage('error', '고객 기록을 불러오는 데 실패했습니다.');
+            });
+        };
+
+        // 5. UI 렌더링 함수 (스타일 업데이트)
+        const renderRecords = (records) => {
+            recordsList.innerHTML = ''; // 기존 목록 초기화
+            if (records.length === 0) {
+                recordsList.innerHTML = `<p class="text-center text-gray-500 py-4">아직 저장된 고객 기록이 없습니다.</p>`;
+                return;
+            }
+
+            records.forEach(record => {
+                const date = record.timestamp ? new Date(record.timestamp.seconds * 1000).toLocaleDateString('ko-KR') : '날짜 불명';
+                const productsText = record.recommendedProducts ? record.recommendedProducts.join(', ') : '없음';
+                
+                const recordEl = document.createElement('div');
+                // 스타일 변경: 짙은 색상 호버 및 텍스트 색상 조정
+                recordEl.className = 'p-4 border-b border-gray-100 last:border-b-0 hover:bg-neutral-50 transition duration-150';
+                recordEl.innerHTML = `
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-lg font-semibold text-primary">${record.clientName}</span>
+                        <span class="text-sm text-gray-500">${date}</span>
+                    </div>
+                    <div class="text-sm text-gray-700 space-y-1">
+                        <p><strong>두피/손상도:</strong> ${getScalpLabel(record.diagnosis.scalpType)} / <span class="text-accent-gold font-bold">${getDamageLabel(record.diagnosis.damageLevel)}</span></p>
+                        <p><strong>최근 시술:</strong> ${formatServiceList(record.diagnosis.lastServiceType)}</p>
+                        <p><strong>AI 분석:</strong> <span class="text-danger">${record.diagnosis.riskAssessment}</span></p>
+                        <p><strong>가능 시술:</strong> ${record.diagnosis.possibleServices}</p>
+                        <p><strong>추천 제품:</strong> ${productsText}</p>
+                    </div>
+                `;
+                recordsList.appendChild(recordEl);
+            });
+        };
+
+        // displayDiagnosis 함수 (스타일 업데이트)
+        const displayDiagnosis = (riskAssessment, possibleServices, recommendedProducts, damageLevel) => {
+            const currentScalpType = scalpTypeInput.value;
+            
+            // 2. 고객 방문 시 실시간 시술 안내
+            diagnosisResult.innerHTML = `
+                <div class="space-y-3">
+                    <p class="text-gray-700"><strong>현재 모발/두피 상태:</strong> ${getScalpLabel(currentScalpType)} 두피, <span class="font-bold text-danger">${getDamageLabel(damageLevel)}</span> 모발 (AI 추론)</p>
+                    <div class="p-3 rounded-lg bg-red-50 border border-red-300">
+                        <h4 class="font-bold text-red-700 mb-1">⚠️ AI 시술 위험성 분석 및 안내</h4>
+                        <p class="text-sm text-red-600">${riskAssessment}</p>
+                    </div>
+                    <!-- 스타일 변경: 네이비/골드 적용 -->
+                    <div class="p-3 rounded-lg bg-info-subtle border border-accent-gold">
+                        <h4 class="font-bold text-primary mb-1">✅ AI 추천 시술 목록 및 시기</h4>
+                        <p class="text-sm text-gray-700">${possibleServices}</p>
+                    </div>
+                </div>
+            `;
+
+            // 3. AI 추천 헤어 제품 기능 (스타일 업데이트)
+            recommendationList.innerHTML = `
+                <h4 class="text-xl font-bold text-secondary mb-3">🛍️ AI 맞춤형 제품 처방전</h4>
+                <div class="space-y-4">
+                    ${recommendedProducts.map(p => `
+                        <div class="flex items-center space-x-4 p-4 bg-white border border-gray-200 rounded-xl shadow-lg transition duration-150 hover:border-accent-gold hover:shadow-xl">
+                            <img src="${p.image}" alt="${p.name}" class="w-20 h-20 object-cover rounded-lg flex-shrink-0 border border-gray-300" onerror="this.onerror=null; this.src='https://placehold.co/80x80/e5e5e5/999999?text=N/A';">
+                            <div class="flex-grow">
+                                <p class="text-base font-semibold text-gray-800">${p.name}</p>
+                                <!-- 가격에 accent-gold 색상 적용 -->
+                                <p class="text-xl font-extrabold text-accent-gold mt-1">${p.price}</p>
+                            </div>
+                            <!-- 버튼에 accent-gold 색상 적용 -->
+                            <button class="text-sm px-4 py-2 btn-gold rounded-full hover:shadow-md flex-shrink-0">구매 문의</button>
+                        </div>
+                    `).join('')}
+                    ${recommendedProducts.length === 0 ? `<p class="text-sm text-gray-500 p-3">현재 상태에 맞는 특별 추천 제품이 없습니다.</p>` : ''}
+                </div>
+            `;
+        };
+
+        // 4. 방문 후 케어 알림 및 재방문 유도 메시지 시뮬레이션 (기존 로직 그대로 유지)
+        window.simulateReminder = (damage) => {
+            const clientName = clientNameInput.value.trim() || '테스트 고객';
+            
+            // 현재 선택된 시술 내역을 배열로 가져옴
+            const checkedServices = document.querySelectorAll('input[name="last-service-type"]:checked');
+            const lastServiceTypes = Array.from(checkedServices).map(cb => cb.value);
+
+            let message = '';
+
+            if (damage === 'severe') {
+                message = `${clientName}님, 모발 손상 회복을 위해 ${new Date().toLocaleDateString('ko-KR')} 방문하여 집중 클리닉을 받아보세요!`;
+            } else if (lastServiceTypes.includes('color')) {
+                message = `${clientName}님, ${new Date().toLocaleDateString('ko-KR')} 염색 유지 시기가 다가왔어요. 홈케어 제품도 확인하세요!`;
+            } else if (lastServiceTypes.includes('perm') || lastServiceTypes.includes('straightening')) {
+                message = `${clientName}님, 펌 시술 후 2달이 지났습니다. 컬 유지력이 약해지기 전에 재방문하여 클리닉을 받으세요.`;
+            } else {
+                message = `${clientName}님, 지금 모발 손상도가 회복되어 펌 시술이 가능합니다! 특별 할인과 함께 관리 케어 받으세요!`;
+            }
+
+            reminderLog.innerHTML = `
+                <!-- 스타일 변경: 골드 및 네이비 색상 적용 -->
+                <div class="mt-2 p-3 bg-yellow-50 border border-accent-gold rounded-xl text-sm text-primary shadow-md">
+                    <p><strong>[알림 발송 시뮬레이션]</strong></p>
+                    <p>${message}</p>
+                    <p class="text-xs mt-1 text-gray-600">실제 시스템에서는 매달 자동 발송되어 재방문율을 높입니다.</p>
+                </div>
+            `;
+            alertMessage('info', '재방문 유도 메시지 발송이 시뮬레이션되었습니다.');
+        };
+
+
+        // 유틸리티 함수 (기존 로직 그대로 유지)
+        const getScalpLabel = (value) => {
+            switch (value) {
+                case 'dry': return '건성';
+                case 'oily': return '지성';
+                case 'sensitive': return '민감성';
+                case 'composite': return '복합성';
+                default: return '미입력';
+            }
+        };
+
+        const getDamageLabel = (value) => {
+            switch (value) {
+                case 'none': return '손상 없음';
+                case 'light': return '경미한 손상';
+                case 'moderate': return '보통 손상';
+                case 'severe': return '심각한 손상';
+                default: return '미입력';
+            }
+        };
+
+        const getServiceLabel = (value) => {
+            switch (value) {
+                case 'cut': return '컷';
+                case 'perm': return '펌 (일반)';
+                case 'straightening': return '매직/스트레이트';
+                case 'color': return '염색';
+                case 'bleach': return '탈색';
+                case 'clinic': return '클리닉';
+                case 'none':
+                default: return '없음';
+            }
+        };
+
+        const formatServiceList = (services) => {
+            if (!services || services.length === 0 || (services.length === 1 && services[0] === 'none')) {
+                return '없음';
+            }
+            // 배열의 각 항목을 한국어 레이블로 변환 후, 쉼표로 연결
+            return services.map(s => getServiceLabel(s)).join(', ');
+        }
+
+
+        const alertMessage = (type, message) => {
+            const alerts = document.getElementById('alerts');
+            const color = type === 'success' ? 'bg-primary' : type === 'error' ? 'bg-danger' : 'bg-blue-500';
+            const alertEl = document.createElement('div');
+            alertEl.className = `p-3 mb-2 text-sm text-white ${color} rounded-lg shadow-xl transition-opacity duration-300`;
+            alertEl.textContent = message;
+            alerts.prepend(alertEl);
+            
+            setTimeout(() => {
+                alertEl.classList.add('opacity-0');
+                alertEl.addEventListener('transitionend', () => alertEl.remove());
+            }, 5000);
+        };
+        
+        // 6. 확인 버튼 클릭 핸들러 (모의 함수)
+        window.handleRecordConfirmation = () => {
+             alertMessage('success', '고객 기록을 확인하고 완료 처리했습니다.');
+             // TODO: 실제 앱에서는 이 함수 내에서 Firestore의 상태 필드(예: 'isReviewed: true')를 업데이트하는 로직을 구현합니다.
+             console.log("고객 기록 확인 완료 (실제 Firestore 업데이트 로직 필요)");
+        };
+
+
+    </script>
+
+    <!-- UI 영역 시작 -->
+    <header class="mb-8">
+        <!-- 텍스트 색상 변경: secondary (아주 짙은 네이비) -->
+        <h1 class="text-5xl font-extrabold text-secondary tracking-tight">PREMIUM SALON AI SYSTEM</h1>
+        <!-- 텍스트 색상 변경: primary (딥 네이비) -->
+        <p class="mt-1 text-xl text-primary font-medium">고객 모발 상태 분석 및 맞춤형 케어 추천 시스템</p>
+        <div class="mt-3 text-sm text-gray-500">
+            디자이너 ID: <span id="user-id-display" class="font-mono text-sm bg-gray-200 px-2 py-1 rounded-lg">로딩 중...</span>
+        </div>
+        <div id="alerts" class="mt-4 fixed top-4 right-4 z-50 w-64">
+            <!-- 알림 메시지가 여기에 표시됩니다. -->
+        </div>
+    </header>
+
+    <!-- 로딩 상태 -->
+    <div id="loading-state" class="text-center py-20 text-xl font-semibold text-gray-500">
+        시스템 로드 및 인증 중입니다...
+    </div>
+
+    <!-- 메인 애플리케이션 컨테이너 -->
+    <div id="app-container" class="hidden">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- 1. AI 기반 모발·두피 진단 입력 폼 (왼쪽 칼럼) -->
+            <div class="lg:col-span-1 card p-8">
+                <!-- 텍스트 색상 변경 -->
+                <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">1. 고객 상태 입력 및 AI 분석 요청</h2>
+                
+                <form id="analysis-form" class="space-y-5">
+                    <!-- 고객명 -->
+                    <div>
+                        <label for="client-name" class="block text-sm font-medium text-gray-700">고객명 <span class="text-red-500">*</span></label>
+                        <input type="text" id="client-name" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
+                    </div>
+
+                    <!-- 두피 타입 -->
+                    <div>
+                        <label for="scalp-type" class="block text-sm font-medium text-gray-700">두피 타입</label>
+                        <select id="scalp-type" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
+                            <option value="dry">건성</option>
+                            <option value="oily">지성</option>
+                            <option value="sensitive">민감성</option>
+                            <option value="composite">복합성</option>
+                        </select>
+                    </div>
+
+                    <!-- 최근 시술 이력 (복수 선택 가능한 체크박스로 변경) -->
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">최근 시술 내역 (복수 선택 가능)</label>
+                        <div id="last-service-type-container" class="space-y-1 flex flex-wrap gap-2">
+                            <!-- 체크박스 색상 변경: primary 색상 적용 -->
+                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                <input type="checkbox" name="last-service-type" value="cut" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                <span class="ml-2 text-sm text-gray-700">컷</span>
+                            </label>
+                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                <input type="checkbox" name="last-service-type" value="perm" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                <span class="ml-2 text-sm text-gray-700">펌 (일반)</span>
+                            </label>
+                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                <input type="checkbox" name="last-service-type" value="straightening" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                <span class="ml-2 text-sm text-gray-700">매직/스트레이트</span>
+                            </label>
+                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                <input type="checkbox" name="last-service-type" value="color" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                <span class="ml-2 text-sm text-gray-700">염색</span>
+                            </label>
+                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                <input type="checkbox" name="last-service-type" value="bleach" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                <span class="ml-2 text-sm text-gray-700">탈색</span>
+                            </label>
+                            <label class="inline-flex items-center p-2 bg-gray-50 rounded-xl cursor-pointer hover:bg-gray-100 transition duration-150 border">
+                                <input type="checkbox" name="last-service-type" value="clinic" class="rounded text-primary focus:ring-primary h-5 w-5">
+                                <span class="ml-2 text-sm text-gray-700">클리닉</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- 마지막 시술 날짜 -->
+                    <div>
+                        <label for="last-service-date" class="block text-sm font-medium text-gray-700">마지막 시술 날짜</label>
+                        <input type="date" id="last-service-date" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-accent-gold focus:ring-accent-gold p-3 border">
+                    </div>
+                    
+                    <!-- 버튼 색상 변경: primary (딥 네이비) 적용 -->
+                    <button type="submit" class="w-full py-3 px-4 border border-transparent rounded-xl shadow-lg text-lg font-medium text-white bg-primary hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-gold transition duration-150">
+                        AI 분석 및 기록 저장
+                    </button>
+                </form>
+
+                <!-- 버튼 스타일 변경: 골드 적용 -->
+                <button onclick="simulateReminder('none')" class="w-full mt-4 py-2 px-4 border border-accent-gold rounded-xl text-sm font-medium text-primary bg-yellow-50 hover:bg-yellow-100 focus:outline-none transition duration-150">
+                    4. 재방문 유도 메시지 시뮬레이션 (수동 실행 버튼)
+                </button>
+            </div>
+
+            <!-- 2, 3. 실시간 시술 안내 및 제품 추천 (중앙 칼럼) -->
+            <div class="lg:col-span-2 space-y-8">
+                <!-- 2. 실시간 시술 안내 -->
+                <div class="card p-8">
+                    <!-- 텍스트 색상 변경 -->
+                    <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">2. 실시간 AI 시술 안내 및 위험성 진단</h2>
+                    <div id="diagnosis-result" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
+                        <p class="text-gray-500">👆 왼쪽에 고객 상태를 입력하고 'AI 분석 요청' 버튼을 누르면 실시간 분석 결과가 여기에 표시됩니다.</p>
+                    </div>
+                </div>
+
+                <!-- 3. AI 추천 헤어 제품 -->
+                <div class="card p-8">
+                    <!-- 텍스트 색상 변경 -->
+                    <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">3. AI 추천 헤어 제품 처방전 (제품 판매 증대)</h2>
+                    <div id="recommendation-list" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
+                        <p class="text-gray-500">AI가 고객 상태 기반으로 맞춤형 브랜드 제품을 추천합니다.</p>
+                    </div>
+                </div>
+
+                <!-- 4. 알림 로그 -->
+                <div class="card p-8">
+                    <!-- 텍스트 색상 변경 -->
+                    <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">4. 케어 알림 및 재방문 유도 메시지 로그</h2>
+                    <div id="reminder-log" class="p-4 bg-info-subtle rounded-lg border border-gray-200">
+                        <p class="text-gray-500">하단의 버튼을 눌러 발송 메시지를 확인해보세요.</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 5. 헤어샵 내부 고객 기록 자동 정리 (하단 전역) -->
+            <div class="lg:col-span-3 card p-8 mt-8">
+                <!-- 텍스트 색상 변경 -->
+                <h2 class="text-2xl font-bold text-secondary mb-5 border-b pb-3 border-gray-100">5. 헤어샵 내부 고객 기록 자동 정리 (CRM)</h2>
+                <div class="scroll-container bg-white border border-gray-200 rounded-xl">
+                    <div id="records-list">
+                        <!-- 고객 기록이 여기에 실시간으로 표시됩니다. -->
+                        <p class="text-center text-gray-500 py-4">고객 기록을 불러오는 중...</p>
+                    </div>
+                </div>
+                
+                <!-- === 확인 버튼 추가 === -->
+                <button onclick="handleRecordConfirmation()" class="w-full mt-6 py-3 px-4 border border-transparent rounded-xl shadow-lg text-lg font-medium text-white bg-primary hover:bg-secondary focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-accent-gold transition duration-150">
+                    기록 확인 완료
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- 6. 하이엔드 살롱 정보 및 푸터 -->
+    <footer class="bg-secondary text-white mt-12 py-10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-8 border-b border-gray-700 pb-8 mb-8">
+                
+                <!-- 1. 살롱 브랜드 정보 -->
+                <div class="col-span-2 md:col-span-1">
+                    <h5 class="text-2xl font-extrabold mb-4 text-accent-gold">LUXURY HAIR SALON</h5>
+                    <p class="text-gray-400 text-sm">
+                        최고급 서비스와 AI 진단 기술이 결합된 하이엔드 헤어 살롱입니다. 고객 한 분 한 분에게 완벽한 스타일과 케어를 제공합니다.
+                    </p>
+                </div>
+                
+                <!-- 2. 고객센터 / 전화번호 -->
+                <div>
+                    <h5 class="text-lg font-semibold mb-4 text-gray-200">고객센터 / 예약 문의</h5>
+                    <p class="text-accent-gold text-2xl font-bold mb-2">
+                        02-1234-5678
+                    </p>
+                    <p class="text-gray-400 text-sm">
+                        운영 시간: 10:00 - 20:00<br>
+                        (매주 월요일 정기 휴무)
+                    </p>
+                </div>
+
+                <!-- 3. 오시는 길 / 주소 -->
+                <div>
+                    <h5 class="text-lg font-semibold mb-4 text-gray-200">오시는 길 (Address)</h5>
+                    <p class="text-gray-400 text-sm">
+                        서울특별시 강남구 테헤란로 123, 1층<br>
+                        (강남역 1번 출구 도보 5분)
+                    </p>
+                    <a href="#" class="mt-2 inline-block text-sm text-accent-gold hover:text-white transition duration-200 underline">
+                        [자세한 지도 보기]
+                    </a>
+                </div>
+                
+                <!-- 4. 자주 찾는 링크 -->
+                <div>
+                    <h5 class="text-lg font-semibold mb-4 text-gray-200">Quick Links</h5>
+                    <ul class="space-y-2">
+                        <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">살롱 소개</a></li>
+                        <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">가격표 및 서비스</a></li>
+                        <li><a href="#" class="text-gray-400 hover:text-accent-gold transition duration-200 text-sm">온라인 예약</a></li>
+                    </ul>
+                </div>
+            </div>
+            
+            <!-- 저작권 -->
+            <div class="text-center text-sm text-gray-500">
+                &copy; 2024 LUXURY HAIR SALON. Powered by AI Care System. All rights reserved.
+            </div>
+        </div>
+    </footer>
+
+</body>
+</html>
